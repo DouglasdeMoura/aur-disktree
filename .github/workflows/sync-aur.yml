@@ -1,0 +1,125 @@
+name: Sync AUR
+
+# Watches tobi/disktree for a new release and republishes both AUR
+# packages (disktree, disktree-bin) with the bumped version. Runs hourly;
+# a release published mid-hour is picked up by the next run.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    env:
+      UPSTREAM: tobi/disktree
+      AUR_PACKAGES: "disktree disktree-bin"
+      GIT_NAME: douglasdemoura
+      GIT_EMAIL: douglasdemoura@users.noreply.github.com
+    steps:
+      - name: Prepare container
+        run: |
+          pacman -Syu --noconfirm --needed git nodejs openssh curl
+
+      - uses: actions/checkout@v5
+
+      - name: Latest upstream release
+        id: release
+        run: |
+          tag="$(curl -fsSL "https://api.github.com/repos/${UPSTREAM}/releases/latest" \
+            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$tag" ]; then
+            echo "could not read latest tag from GitHub API" >&2
+            exit 1
+          fi
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "upstream release: $tag"
+
+      - name: Stale packages
+        id: stale
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          stale=""
+          for pkg in $AUR_PACKAGES; do
+            cur="$(sed -n 's/^pkgver=\(.*\)$/\1/p' "pkgs/$pkg/PKGBUILD")"
+            if [ "$cur" != "$VERSION" ]; then
+              stale="$stale $pkg"
+              echo "$pkg is stale: $cur -> $VERSION"
+            fi
+          done
+          echo "packages=$stale" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version and refresh checksums
+        if: steps.stale.outputs.packages != ''
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          PACKAGES: ${{ steps.stale.outputs.packages }}
+        run: |
+          set -euo pipefail
+          for pkg in $PACKAGES; do
+            sed -i "s/^pkgver=.*/pkgver=$VERSION/; s/^pkgrel=.*/pkgrel=1/" \
+              "pkgs/$pkg/PKGBUILD"
+          done
+
+          if echo " $PACKAGES " | grep -q " disktree "; then
+            srchash="$(curl -fsSL \
+              "https://codeload.github.com/${UPSTREAM}/tar.gz/refs/tags/v${VERSION}" \
+              | sha256sum | cut -d' ' -f1)"
+            sed -i "s/^sha256sums=.*/sha256sums=('$srchash')/" pkgs/disktree/PKGBUILD
+          fi
+
+          if echo " $PACKAGES " | grep -q " disktree-bin "; then
+            x86="$(curl -fsSL "https://github.com/${UPSTREAM}/releases/download/v${VERSION}/disktree-${VERSION}-x86_64-linux.tar.gz.sha256" | cut -d' ' -f1)"
+            a64="$(curl -fsSL "https://github.com/${UPSTREAM}/releases/download/v${VERSION}/disktree-${VERSION}-aarch64-linux.tar.gz.sha256" | cut -d' ' -f1)"
+            if [ -z "$x86" ] || [ -z "$a64" ]; then
+              echo "release assets for v$VERSION missing; aborting" >&2
+              exit 1
+            fi
+            sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$x86')/" pkgs/disktree-bin/PKGBUILD
+            sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$a64')/" pkgs/disktree-bin/PKGBUILD
+          fi
+
+          for pkg in $PACKAGES; do
+            (cd "pkgs/$pkg" && makepkg --printsrcinfo > .SRCINFO)
+          done
+
+      - name: Push to AUR
+        if: steps.stale.outputs.packages != ''
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PACKAGES: ${{ steps.stale.outputs.packages }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H aur.archlinux.org > ~/.ssh/known_hosts
+          git config --global user.name "$GIT_NAME"
+          git config --global user.email "$GIT_EMAIL"
+
+          for pkg in $PACKAGES; do
+            git clone --depth 1 "ssh://aur@aur.archlinux.org/$pkg.git" "aur-$pkg"
+            cp "pkgs/$pkg/PKGBUILD" "pkgs/$pkg/.SRCINFO" "aur-$pkg/"
+            cd "aur-$pkg"
+            if git diff --quiet; then
+              echo "$pkg: already up to date"
+            else
+              git add PKGBUILD .SRCINFO
+              git commit -m "upgpkg: $pkg $VERSION-1"
+              git push
+              echo "$pkg: pushed $VERSION-1 to AUR"
+            fi
+            cd ..
+          done

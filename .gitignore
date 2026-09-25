@@ -1,0 +1,7 @@
+# makepkg artifacts
+pkgs/*/src/
+pkgs/*/pkg/
+pkgs/*/*.tar.gz
+pkgs/*/*.pkg.tar.zst
+pkgs/*/*.pkg.tar.zst.sig
+pkgs/*/*.log
