@@ -68,8 +68,3 @@ cd pkgs/disktree-bin  && makepkg -sf --noconfirm   # packages the release binary
 makepkg --printsrcinfo > .SRCINFO                  # regenerate metadata
 ```
 
-Note: the source PKGBUILD sets `options=('!lto')` on purpose. With
-`makepkg.conf` LTO flags (`-flto=auto`), the C shims inside `wayland-backend`
-are emitted as GCC LTO bytecode, which rustc's default linker (rust-lld,
-since 1.98) cannot read — the final link fails with
-`undefined symbol: wl_log_trampoline_to_rust_client`.
