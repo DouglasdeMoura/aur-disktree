@@ -8,56 +8,53 @@ with [tobi/disktree](https://github.com/tobi/disktree) releases.
 - **disktree-bin** — packages the official prebuilt Linux binaries
   (x86_64 + aarch64) from each GitHub release.
 
-A scheduled GitHub Actions workflow (`.github/workflows/sync-aur.yml`) runs
-hourly: it reads the latest upstream release, and when it is newer than the
-`pkgver` in the PKGBUILDs it bumps the version, refreshes the SHA-256
-checksums (reusing the `.sha256` assets upstream publishes), regenerates
-`.SRCINFO`, and pushes both package repos on the AUR (`upgpkg: <pkg> <ver>-1`).
-It can also be run manually from the Actions tab ("Sync AUR" → "Run
-workflow").
+`sync-aur.sh` keeps them current. It reads the latest upstream release and,
+when it is newer than the `pkgver` in the PKGBUILDs, bumps the version,
+refreshes the SHA-256 checksums (reusing the `.sha256` assets upstream
+publishes), regenerates `.SRCINFO`, test-builds each changed package, pushes
+both package repos on the AUR (`upgpkg: <pkg> <ver>-1`), clears the
+out-of-date flag, and commits the bump to this repo. It is a no-op when
+nothing is stale, and `--dry-run` only reports.
 
-A second workflow (`keepalive.yml`) pushes an empty commit once a month,
-because GitHub disables scheduled workflows after 60 days of repository
-inactivity.
+It runs hourly from a **user-level systemd timer on the maintainer's
+machine** (`systemd/aur-disktree-sync.{service,timer}`), using the deploy
+key at `~/.ssh/aur_disktree_ed25519`. Missed runs are caught up at the next
+boot (`Persistent=true`).
+
+> **Why not GitHub Actions?** It was tried first (Sept–Oct 2026). The AUR
+> accepts this deploy key from a home connection but answers
+> `Permission denied (publickey)` to the identical key offered from
+> GitHub-hosted runners (Microsoft/Azure address space, AS8075), so an AUR
+> push can never succeed from there.
 
 ## One-time setup
 
-1. **AUR account** — register at <https://aur.archlinux.org/register>.
-2. **Add the deploy key** — in your AUR profile, add this SSH public key
-   (generated locally at `~/.ssh/aur_disktree_ed25519`):
+1. **AUR account** — register at <https://aur.archlinux.org/register> and add
+   the public half of the deploy key (`~/.ssh/aur_disktree_ed25519.pub`) under
+   *My Account → SSH Public Key*.
+2. **Install the timer** on the machine that holds the key:
 
    ```
-   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ23ZlPG/In5e9MzNDONvmNYvzz74PjYFV3yycBsUmVR aur-disktree-automation (2026-09-25)
+   cp systemd/aur-disktree-sync.* ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now aur-disktree-sync.timer
    ```
 
-3. **Create the packages (first push only)** — push to a package URL that
-   does not exist yet and the AUR creates it automatically. With the key on
-   your agent, or run once from CI:
+3. **Check it**:
 
    ```
-   git clone ssh://aur@aur.archlinux.org/disktree.git && cp pkgs/disktree/PKGBUILD pkgs/disktree/.SRCINFO disktree/ && (cd disktree && git add -A && git commit -m "upgpkg: disktree 0.10.0-1" && git push)
-   git clone ssh://aur@aur.archlinux.org/disktree-bin.git && cp pkgs/disktree-bin/PKGBUILD pkgs/disktree-bin/.SRCINFO disktree-bin/ && (cd disktree-bin && git add -A && git commit -m "upgpkg: disktree-bin 0.10.0-1" && git push)
+   ./sync-aur.sh --dry-run                       # what would change
+   systemctl --user list-timers aur-disktree-sync.timer
+   journalctl --user -u aur-disktree-sync.service -n 20
    ```
-
-4. **GitHub secret** — in this repo: Settings → Secrets and variables →
-   Actions → New repository secret:
-
-   - Name: `AUR_SSH_KEY`
-   - Value: contents of `~/.ssh/aur_disktree_ed25519` (the **private** key)
-
-5. **Push this repo to GitHub** (public is fine — no secrets are stored in
-   it), then trigger **Sync AUR** once manually to verify the whole path.
-
-From then on everything is automatic: upstream release → hourly check →
-both AUR packages updated within the hour.
 
 ## Layout
 
 ```
 pkgs/disktree/PKGBUILD       source package
 pkgs/disktree-bin/PKGBUILD   prebuilt-binary package
-.github/workflows/sync-aur.yml   hourly release watcher + AUR pusher
-.github/workflows/keepalive.yml  monthly empty commit to keep cron alive
+sync-aur.sh                  release watcher + AUR pusher
+systemd/                     hourly user timer that runs it
 ```
 
 ## Local testing

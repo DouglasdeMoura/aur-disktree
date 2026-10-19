@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync AUR disktree packages with upstream releases
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/github.com/douglasdemoura/aur-disktree/sync-aur.sh
