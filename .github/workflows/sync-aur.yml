@@ -118,8 +118,10 @@ jobs:
           # Fail every run, not just release runs, if the deploy key stops
           # working: AUR_SSH_KEY must hold the private key whose public half
           # is registered on the AUR account.
+          echo "deploy key: $(ssh-keygen -lf "$ssh_dir/key" 2>&1)"
           if ! $ssh_cmd aur@aur.archlinux.org help >/dev/null 2>&1; then
             echo "::error::cannot authenticate to aur.archlinux.org with AUR_SSH_KEY" >&2
+            $ssh_cmd -v aur@aur.archlinux.org help 2>&1 | grep -iE 'identity|offering|denied|load key|authentications|server accepts|no more' >&2 || true
             exit 1
           fi
           echo "AUR ssh access OK"
