@@ -30,6 +30,9 @@ jobs:
       - name: Prepare container
         run: |
           pacman -Syu --noconfirm --needed git nodejs openssh curl
+          # makepkg refuses to run as root (exit 10), and the container's
+          # default user is root, so give it an unprivileged user.
+          useradd -m builder
 
       - uses: actions/checkout@v5
 
@@ -90,8 +93,10 @@ jobs:
             sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$a64')/" pkgs/disktree-bin/PKGBUILD
           fi
 
+          chown -R builder: pkgs
           for pkg in $PACKAGES; do
-            (cd "pkgs/$pkg" && makepkg --printsrcinfo > .SRCINFO)
+            runuser -u builder -- \
+              sh -c "cd 'pkgs/$pkg' && makepkg --printsrcinfo > .SRCINFO"
           done
 
       - name: Push to AUR
