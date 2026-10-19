@@ -107,14 +107,16 @@ jobs:
           PACKAGES: ${{ steps.stale.outputs.packages }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          # Pinned host key (fingerprint SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4,
-          # as published on https://aur.archlinux.org/). A runtime ssh-keyscan
-          # produced an empty known_hosts in the container and every push
-          # failed with "Host key verification failed".
-          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > ~/.ssh/known_hosts
+          # In a container job GitHub sets HOME=/github/home, but OpenSSH
+          # resolves ~ from the passwd entry (/root), so anything written to
+          # ~/.ssh here is never read. Use explicit paths instead.
+          ssh_dir="$(mktemp -d)"
+          printf '%s\n' "$AUR_SSH_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          # Pinned host key, fingerprint SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4
+          # as published on https://aur.archlinux.org/.
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
           git config --global user.name "$GIT_NAME"
           git config --global user.email "$GIT_EMAIL"
 
